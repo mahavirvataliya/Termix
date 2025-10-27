@@ -252,7 +252,8 @@ async function initializeCompleteDatabase(): Promise<void> {
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (credential_id) REFERENCES ssh_credentials (id),
         FOREIGN KEY (owner_id) REFERENCES users (id),
-        FOREIGN KEY (shared_with_user_id) REFERENCES users (id)
+        FOREIGN KEY (shared_with_user_id) REFERENCES users (id),
+        UNIQUE(credential_id, shared_with_user_id)
     );
 
 `);
