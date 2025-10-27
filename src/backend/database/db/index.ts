@@ -242,6 +242,19 @@ async function initializeCompleteDatabase(): Promise<void> {
         FOREIGN KEY (user_id) REFERENCES users (id)
     );
 
+    CREATE TABLE IF NOT EXISTS ssh_credential_shares (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        credential_id INTEGER NOT NULL,
+        owner_id TEXT NOT NULL,
+        shared_with_user_id TEXT NOT NULL,
+        host_ids TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (credential_id) REFERENCES ssh_credentials (id),
+        FOREIGN KEY (owner_id) REFERENCES users (id),
+        FOREIGN KEY (shared_with_user_id) REFERENCES users (id)
+    );
+
 `);
 
   migrateSchema();
