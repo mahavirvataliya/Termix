@@ -33,10 +33,20 @@ import {
   AlertTriangle,
   CheckCircle,
   FileText,
+  Users,
+  Trash2,
+  UserPlus,
 } from "lucide-react";
-import { getCredentialDetails, getCredentialHosts } from "@/ui/main-axios";
+import { 
+  getCredentialDetails, 
+  getCredentialHosts,
+  getCredentialShares,
+  unshareCredential,
+} from "@/ui/main-axios";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
+import { useConfirmation } from "@/hooks/use-confirmation.ts";
+import ShareDialog from "./ShareDialog";
 import type {
   Credential,
   HostInfo,
@@ -49,21 +59,28 @@ const CredentialViewer: React.FC<CredentialViewerProps> = ({
   onEdit,
 }) => {
   const { t } = useTranslation();
+  const { confirmWithToast } = useConfirmation();
   const [credentialDetails, setCredentialDetails] = useState<Credential | null>(
     null,
   );
   const [hostsUsing, setHostsUsing] = useState<HostInfo[]>([]);
+  const [shares, setShares] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingShares, setLoadingShares] = useState(false);
   const [showSensitive, setShowSensitive] = useState<Record<string, boolean>>(
     {},
   );
-  const [activeTab, setActiveTab] = useState<"overview" | "security" | "usage">(
+  const [activeTab, setActiveTab] = useState<"overview" | "security" | "usage" | "sharing">(
     "overview",
   );
+  const [showShareDialog, setShowShareDialog] = useState(false);
 
   useEffect(() => {
     fetchCredentialDetails();
     fetchHostsUsing();
+    if (!credential.isShared) {
+      fetchShares();
+    }
   }, [credential.id]);
 
   const fetchCredentialDetails = async () => {
@@ -83,6 +100,36 @@ const CredentialViewer: React.FC<CredentialViewerProps> = ({
       toast.error(t("credentials.failedToFetchHostsUsing"));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchShares = async () => {
+    setLoadingShares(true);
+    try {
+      const response = await getCredentialShares(credential.id);
+      setShares(response);
+    } catch (error) {
+      // Silently fail - user might not have permission to view shares
+      setShares([]);
+    } finally {
+      setLoadingShares(false);
+    }
+  };
+
+  const handleUnshare = async (sharedWithUserId: string, username: string) => {
+    const confirmed = await confirmWithToast(
+      `Remove access for ${username}?`,
+      `This will prevent ${username} from using this credential.`,
+    );
+
+    if (!confirmed) return;
+
+    try {
+      await unshareCredential(credential.id, sharedWithUserId);
+      toast.success(`Access removed for ${username}`);
+      fetchShares();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to remove access");
     }
   };
 
@@ -238,6 +285,26 @@ const CredentialViewer: React.FC<CredentialViewerProps> = ({
               {t("credentials.security")}
             </Button>
             <Button
+              variant={activeTab === "usage" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setActiveTab("usage")}
+              className="flex-1 h-10"
+            >
+              <Server className="h-4 w-4 mr-2" />
+              {t("credentials.usage")}
+            </Button>
+            {!credential.isShared && (
+              <Button
+                variant={activeTab === "sharing" ? "default" : "ghost"}
+                size="sm"
+                onClick={() => setActiveTab("sharing")}
+                className="flex-1 h-10"
+              >
+                <Users className="h-4 w-4 mr-2" />
+                Sharing
+              </Button>
+            )}
+          </div>
               variant={activeTab === "usage" ? "default" : "ghost"}
               size="sm"
               onClick={() => setActiveTab("usage")}
@@ -512,6 +579,88 @@ const CredentialViewer: React.FC<CredentialViewerProps> = ({
               </CardContent>
             </Card>
           )}
+
+          {activeTab === "sharing" && !credential.isShared && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg flex items-center space-x-2">
+                    <Users className="h-5 w-5 text-zinc-600 dark:text-zinc-400" />
+                    <span>Shared With</span>
+                    <Badge variant="secondary">{shares.length}</Badge>
+                  </CardTitle>
+                  <Button onClick={() => setShowShareDialog(true)} size="sm">
+                    <UserPlus className="h-4 w-4 mr-2" />
+                    Share
+                  </Button>
+                </div>
+                <CardDescription>
+                  Users who have access to this credential
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {loadingShares ? (
+                  <div className="text-center py-10">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-600 mx-auto"></div>
+                  </div>
+                ) : shares.length === 0 ? (
+                  <div className="text-center py-10 text-zinc-500 dark:text-zinc-400">
+                    <Users className="h-12 w-12 mx-auto mb-6 text-zinc-300 dark:text-zinc-600" />
+                    <p>This credential is not shared with anyone</p>
+                    <p className="text-sm mt-2">
+                      Click "Share" to grant access to other users
+                    </p>
+                  </div>
+                ) : (
+                  <ScrollArea className="h-64">
+                    <div className="space-y-3">
+                      {shares.map((share) => (
+                        <div
+                          key={share.id}
+                          className="flex items-center justify-between p-4 border rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                        >
+                          <div className="flex items-center space-x-3 flex-1">
+                            <div className="p-2 bg-zinc-100 dark:bg-zinc-800 rounded">
+                              <User className="h-4 w-4 text-zinc-600 dark:text-zinc-400" />
+                            </div>
+                            <div className="flex-1">
+                              <div className="font-medium">
+                                {share.sharedWithUsername}
+                              </div>
+                              <div className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+                                Shared {formatDate(share.createdAt)}
+                              </div>
+                              {share.hostIds && share.hostIds.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                  <Badge variant="outline" className="text-xs">
+                                    <Server className="h-3 w-3 mr-1" />
+                                    {share.hostIds.length} host
+                                    {share.hostIds.length !== 1 ? "s" : ""}
+                                  </Badge>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() =>
+                              handleUnshare(
+                                share.sharedWithUserId,
+                                share.sharedWithUsername,
+                              )
+                            }
+                          >
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <SheetFooter>
@@ -524,6 +673,15 @@ const CredentialViewer: React.FC<CredentialViewerProps> = ({
           </Button>
         </SheetFooter>
       </SheetContent>
+
+      {showShareDialog && (
+        <ShareDialog
+          open={showShareDialog}
+          onClose={() => setShowShareDialog(false)}
+          credential={credential}
+          onSuccess={fetchShares}
+        />
+      )}
     </Sheet>
   );
 };

@@ -47,6 +47,7 @@ import {
   Upload,
   Server,
   User,
+  Users,
 } from "lucide-react";
 import {
   getCredentials,
@@ -642,9 +643,20 @@ export function CredentialsManager({
                                           {credential.name ||
                                             `${credential.username}`}
                                         </h3>
+                                        {credential.isShared && (
+                                          <Badge 
+                                            variant="secondary" 
+                                            className="text-xs px-1 py-0 h-4"
+                                          >
+                                            <Users className="h-2.5 w-2.5 mr-0.5" />
+                                            Shared
+                                          </Badge>
+                                        )}
                                       </div>
                                       <p className="text-xs text-muted-foreground truncate">
-                                        {credential.username}
+                                        {credential.isShared && credential.ownerUsername
+                                          ? `Owner: ${credential.ownerUsername}`
+                                          : credential.username}
                                       </p>
                                       <p className="text-xs text-muted-foreground truncate">
                                         {credential.authType === "password"
