@@ -1,7 +1,7 @@
 import express from "express";
 import { db } from "../db/index.js";
-import { sshCredentials, sshCredentialUsage, sshData } from "../db/schema.js";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { sshCredentials, sshCredentialUsage, sshData, sshCredentialShares, users } from "../db/schema.js";
+import { eq, and, desc, sql, or } from "drizzle-orm";
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { authLogger } from "../../utils/logger.js";
@@ -234,7 +234,8 @@ router.get(
     }
 
     try {
-      const credentials = await SimpleDBOps.select(
+      // Get credentials owned by the user
+      const ownedCredentials = await SimpleDBOps.select(
         db
           .select()
           .from(sshCredentials)
@@ -244,7 +245,56 @@ router.get(
         userId,
       );
 
-      res.json(credentials.map((cred) => formatCredentialOutput(cred)));
+      // Get credentials shared with the user
+      const sharedCredentialIds = await db
+        .select({ credentialId: sshCredentialShares.credentialId, ownerId: sshCredentialShares.ownerId })
+        .from(sshCredentialShares)
+        .where(eq(sshCredentialShares.sharedWithUserId, userId));
+
+      let sharedCredentials: any[] = [];
+      if (sharedCredentialIds.length > 0) {
+        const credIds = sharedCredentialIds.map((s) => s.credentialId);
+        sharedCredentials = await SimpleDBOps.select(
+          db
+            .select()
+            .from(sshCredentials)
+            .where(
+              or(
+                ...credIds.map((id) => eq(sshCredentials.id, id))
+              )
+            ),
+          "ssh_credentials",
+          userId,
+        );
+
+        // Get owner usernames for shared credentials
+        const ownerIds = [...new Set(sharedCredentialIds.map(s => s.ownerId))];
+        const owners = await db
+          .select({ id: users.id, username: users.username })
+          .from(users)
+          .where(
+            or(
+              ...ownerIds.map((id) => eq(users.id, id))
+            )
+          );
+
+        const ownerMap = new Map(owners.map(o => [o.id, o.username]));
+
+        // Mark credentials as shared and add owner info
+        sharedCredentials = sharedCredentials.map((cred) => {
+          const shareInfo = sharedCredentialIds.find(s => s.credentialId === cred.id);
+          return {
+            ...cred,
+            isShared: true,
+            ownerId: shareInfo?.ownerId,
+            ownerUsername: shareInfo ? ownerMap.get(shareInfo.ownerId) : undefined,
+          };
+        });
+      }
+
+      // Combine and format
+      const allCredentials = [...ownedCredentials, ...sharedCredentials];
+      res.json(allCredentials.map((cred) => formatCredentialOutput(cred)));
     } catch (err) {
       authLogger.error("Failed to fetch credentials", err);
       res.status(500).json({ error: "Failed to fetch credentials" });
@@ -306,7 +356,8 @@ router.get(
     }
 
     try {
-      const credentials = await SimpleDBOps.select(
+      // Try to get credential owned by user
+      let credentials = await SimpleDBOps.select(
         db
           .select()
           .from(sshCredentials)
@@ -319,6 +370,38 @@ router.get(
         "ssh_credentials",
         userId,
       );
+
+      let isShared = false;
+      let ownerId = userId;
+
+      // If not owned, check if it's shared with the user
+      if (credentials.length === 0) {
+        const share = await db
+          .select()
+          .from(sshCredentialShares)
+          .where(
+            and(
+              eq(sshCredentialShares.credentialId, parseInt(id)),
+              eq(sshCredentialShares.sharedWithUserId, userId),
+            ),
+          )
+          .limit(1);
+
+        if (share.length > 0) {
+          isShared = true;
+          ownerId = share[0].ownerId;
+          
+          // Get the shared credential
+          credentials = await SimpleDBOps.select(
+            db
+              .select()
+              .from(sshCredentials)
+              .where(eq(sshCredentials.id, parseInt(id))),
+            "ssh_credentials",
+            ownerId,
+          );
+        }
+      }
 
       if (credentials.length === 0) {
         return res.status(404).json({ error: "Credential not found" });
@@ -341,6 +424,11 @@ router.get(
       }
       if (credential.key_password) {
         (output as any).keyPassword = credential.key_password;
+      }
+
+      if (isShared) {
+        (output as any).isShared = true;
+        (output as any).ownerId = ownerId;
       }
 
       res.json(output);
@@ -728,6 +816,9 @@ function formatCredentialOutput(credential: any): any {
     lastUsed: credential.last_used || credential.lastUsed,
     createdAt: credential.created_at || credential.createdAt,
     updatedAt: credential.updated_at || credential.updatedAt,
+    isShared: credential.isShared || false,
+    ownerId: credential.ownerId,
+    ownerUsername: credential.ownerUsername,
   };
 }
 
@@ -1602,6 +1693,274 @@ router.post(
         error:
           error instanceof Error ? error.message : "Failed to deploy SSH key",
       });
+    }
+  },
+);
+
+// Share a credential with another user
+// POST /credentials/:id/share
+router.post(
+  "/:id/share",
+  authenticateJWT,
+  requireDataAccess,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId;
+    const { id: credentialId } = req.params;
+    const { sharedWithUserId, hostIds } = req.body;
+
+    if (!isNonEmptyString(userId) || !credentialId || !isNonEmptyString(sharedWithUserId)) {
+      authLogger.warn("Invalid request for credential sharing");
+      return res.status(400).json({ error: "Credential ID and target user ID are required" });
+    }
+
+    try {
+      // Verify credential ownership
+      const credentials = await SimpleDBOps.select(
+        db
+          .select()
+          .from(sshCredentials)
+          .where(
+            and(
+              eq(sshCredentials.id, parseInt(credentialId)),
+              eq(sshCredentials.userId, userId),
+            ),
+          ),
+        "ssh_credentials",
+        userId,
+      );
+
+      if (credentials.length === 0) {
+        return res.status(404).json({ error: "Credential not found or you don't have permission to share it" });
+      }
+
+      // Verify target user exists
+      const targetUser = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, sharedWithUserId))
+        .limit(1);
+
+      if (targetUser.length === 0) {
+        return res.status(404).json({ error: "Target user not found" });
+      }
+
+      // Check if already shared
+      const existingShare = await db
+        .select()
+        .from(sshCredentialShares)
+        .where(
+          and(
+            eq(sshCredentialShares.credentialId, parseInt(credentialId)),
+            eq(sshCredentialShares.ownerId, userId),
+            eq(sshCredentialShares.sharedWithUserId, sharedWithUserId),
+          ),
+        );
+
+      if (existingShare.length > 0) {
+        // Update existing share
+        await db
+          .update(sshCredentialShares)
+          .set({
+            hostIds: Array.isArray(hostIds) ? hostIds.join(",") : hostIds || null,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(sshCredentialShares.id, existingShare[0].id));
+
+        authLogger.success(
+          `Credential share updated: credential ${credentialId} with user ${sharedWithUserId}`,
+          {
+            operation: "credential_share_update",
+            userId,
+            credentialId: parseInt(credentialId),
+            sharedWithUserId,
+          },
+        );
+
+        res.json({ message: "Credential share updated successfully" });
+      } else {
+        // Create new share
+        await db.insert(sshCredentialShares).values({
+          credentialId: parseInt(credentialId),
+          ownerId: userId,
+          sharedWithUserId,
+          hostIds: Array.isArray(hostIds) ? hostIds.join(",") : hostIds || null,
+        });
+
+        authLogger.success(
+          `Credential shared: credential ${credentialId} with user ${sharedWithUserId}`,
+          {
+            operation: "credential_share_create",
+            userId,
+            credentialId: parseInt(credentialId),
+            sharedWithUserId,
+          },
+        );
+
+        res.status(201).json({ message: "Credential shared successfully" });
+      }
+    } catch (err) {
+      authLogger.error("Failed to share credential", err);
+      res.status(500).json({
+        error: err instanceof Error ? err.message : "Failed to share credential",
+      });
+    }
+  },
+);
+
+// Unshare a credential from a user
+// DELETE /credentials/:id/share/:sharedWithUserId
+router.delete(
+  "/:id/share/:sharedWithUserId",
+  authenticateJWT,
+  requireDataAccess,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId;
+    const { id: credentialId, sharedWithUserId } = req.params;
+
+    if (!isNonEmptyString(userId) || !credentialId || !sharedWithUserId) {
+      authLogger.warn("Invalid request for credential unsharing");
+      return res.status(400).json({ error: "Invalid request" });
+    }
+
+    try {
+      // Verify ownership and delete share
+      const result = await db
+        .delete(sshCredentialShares)
+        .where(
+          and(
+            eq(sshCredentialShares.credentialId, parseInt(credentialId)),
+            eq(sshCredentialShares.ownerId, userId),
+            eq(sshCredentialShares.sharedWithUserId, sharedWithUserId),
+          ),
+        );
+
+      authLogger.success(
+        `Credential unshared: credential ${credentialId} from user ${sharedWithUserId}`,
+        {
+          operation: "credential_share_delete",
+          userId,
+          credentialId: parseInt(credentialId),
+          sharedWithUserId,
+        },
+      );
+
+      res.json({ message: "Credential unshared successfully" });
+    } catch (err) {
+      authLogger.error("Failed to unshare credential", err);
+      res.status(500).json({
+        error: err instanceof Error ? err.message : "Failed to unshare credential",
+      });
+    }
+  },
+);
+
+// Get all shares for a credential
+// GET /credentials/:id/shares
+router.get(
+  "/:id/shares",
+  authenticateJWT,
+  requireDataAccess,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId;
+    const { id: credentialId } = req.params;
+
+    if (!isNonEmptyString(userId) || !credentialId) {
+      authLogger.warn("Invalid request for credential shares fetch");
+      return res.status(400).json({ error: "Invalid request" });
+    }
+
+    try {
+      // Verify credential ownership
+      const credentials = await SimpleDBOps.select(
+        db
+          .select()
+          .from(sshCredentials)
+          .where(
+            and(
+              eq(sshCredentials.id, parseInt(credentialId)),
+              eq(sshCredentials.userId, userId),
+            ),
+          ),
+        "ssh_credentials",
+        userId,
+      );
+
+      if (credentials.length === 0) {
+        return res.status(404).json({ error: "Credential not found or you don't have permission to view shares" });
+      }
+
+      // Get all shares for this credential
+      const shares = await db
+        .select()
+        .from(sshCredentialShares)
+        .where(
+          and(
+            eq(sshCredentialShares.credentialId, parseInt(credentialId)),
+            eq(sshCredentialShares.ownerId, userId),
+          ),
+        );
+
+      // Get usernames for shared users
+      if (shares.length > 0) {
+        const userIds = shares.map(s => s.sharedWithUserId);
+        const sharedUsers = await db
+          .select({ id: users.id, username: users.username })
+          .from(users)
+          .where(
+            or(
+              ...userIds.map((id) => eq(users.id, id))
+            )
+          );
+
+        const userMap = new Map(sharedUsers.map(u => [u.id, u.username]));
+
+        const formattedShares = shares.map(share => ({
+          id: share.id,
+          credentialId: share.credentialId,
+          sharedWithUserId: share.sharedWithUserId,
+          sharedWithUsername: userMap.get(share.sharedWithUserId),
+          hostIds: share.hostIds ? share.hostIds.split(",").map(Number) : [],
+          createdAt: share.createdAt,
+          updatedAt: share.updatedAt,
+        }));
+
+        res.json(formattedShares);
+      } else {
+        res.json([]);
+      }
+    } catch (err) {
+      authLogger.error("Failed to fetch credential shares", err);
+      res.status(500).json({
+        error: err instanceof Error ? err.message : "Failed to fetch credential shares",
+      });
+    }
+  },
+);
+
+// Get all users (for sharing UI) - only username and id
+// GET /credentials/users/list
+router.get(
+  "/users/list",
+  authenticateJWT,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId;
+
+    if (!isNonEmptyString(userId)) {
+      authLogger.warn("Invalid userId for users list fetch");
+      return res.status(400).json({ error: "Invalid userId" });
+    }
+
+    try {
+      // Get all users except the current user
+      const allUsers = await db
+        .select({ id: users.id, username: users.username })
+        .from(users)
+        .where(sql`${users.id} != ${userId}`);
+
+      res.json(allUsers);
+    } catch (err) {
+      authLogger.error("Failed to fetch users list", err);
+      res.status(500).json({ error: "Failed to fetch users list" });
     }
   },
 );

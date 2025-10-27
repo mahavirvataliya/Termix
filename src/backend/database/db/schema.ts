@@ -172,3 +172,23 @@ export const sshCredentialUsage = sqliteTable("ssh_credential_usage", {
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const sshCredentialShares = sqliteTable("ssh_credential_shares", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  credentialId: integer("credential_id")
+    .notNull()
+    .references(() => sshCredentials.id),
+  ownerId: text("owner_id")
+    .notNull()
+    .references(() => users.id),
+  sharedWithUserId: text("shared_with_user_id")
+    .notNull()
+    .references(() => users.id),
+  hostIds: text("host_ids"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
