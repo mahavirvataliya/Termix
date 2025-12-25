@@ -1,4 +1,5 @@
 import ssh2Pkg from "ssh2";
+import { sshLogger } from "./logger.js";
 const ssh2Utils = ssh2Pkg.utils;
 
 function detectKeyTypeFromContent(keyContent: string): string {
@@ -49,7 +50,7 @@ function detectKeyTypeFromContent(keyContent: string): string {
       }
 
       return "ssh-rsa";
-    } catch (error) {
+    } catch {
       return "ssh-rsa";
     }
   }
@@ -236,7 +237,7 @@ export function parseSSHKey(
             } else {
               publicKey = "";
             }
-          } catch (error) {
+          } catch {
             publicKey = "";
           }
 
@@ -268,7 +269,7 @@ export function parseSSHKey(
           success: true,
         };
       }
-    } catch (fallbackError) {}
+    } catch (error) {}
 
     return {
       privateKey: privateKeyData,
@@ -310,7 +311,7 @@ export function detectKeyType(privateKeyData: string): string {
       return "unknown";
     }
     return parsedKey.type || "unknown";
-  } catch (error) {
+  } catch {
     return "unknown";
   }
 }

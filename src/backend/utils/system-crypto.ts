@@ -35,9 +35,23 @@ class SystemCrypto {
         if (jwtMatch && jwtMatch[1] && jwtMatch[1].length >= 64) {
           this.jwtSecret = jwtMatch[1];
           process.env.JWT_SECRET = jwtMatch[1];
+          databaseLogger.success("JWT secret loaded from .env file", {
+            operation: "jwt_init_from_file_success",
+            secretLength: jwtMatch[1].length,
+            secretPrefix: jwtMatch[1].substring(0, 8) + "...",
+          });
           return;
+        } else {
+          databaseLogger.warn(
+            "JWT_SECRET in .env file is invalid or too short",
+            {
+              operation: "jwt_init_invalid_secret",
+              hasMatch: !!jwtMatch,
+              secretLength: jwtMatch?.[1]?.length || 0,
+            },
+          );
         }
-      } catch {}
+      } catch (fileError) {}
 
       await this.generateAndGuideUser();
     } catch (error) {
@@ -57,14 +71,20 @@ class SystemCrypto {
 
   async initializeDatabaseKey(): Promise<void> {
     try {
+      const dataDir = process.env.DATA_DIR || "./db/data";
+      const envPath = path.join(dataDir, ".env");
+
       const envKey = process.env.DATABASE_KEY;
       if (envKey && envKey.length >= 64) {
         this.databaseKey = Buffer.from(envKey, "hex");
+        const keyFingerprint = crypto
+          .createHash("sha256")
+          .update(this.databaseKey)
+          .digest("hex")
+          .substring(0, 16);
+
         return;
       }
-
-      const dataDir = process.env.DATA_DIR || "./db/data";
-      const envPath = path.join(dataDir, ".env");
 
       try {
         const envContent = await fs.readFile(envPath, "utf8");
@@ -72,14 +92,23 @@ class SystemCrypto {
         if (dbKeyMatch && dbKeyMatch[1] && dbKeyMatch[1].length >= 64) {
           this.databaseKey = Buffer.from(dbKeyMatch[1], "hex");
           process.env.DATABASE_KEY = dbKeyMatch[1];
+
+          const keyFingerprint = crypto
+            .createHash("sha256")
+            .update(this.databaseKey)
+            .digest("hex")
+            .substring(0, 16);
+
           return;
+        } else {
         }
-      } catch {}
+      } catch (fileError) {}
 
       await this.generateAndGuideDatabaseKey();
     } catch (error) {
       databaseLogger.error("Failed to initialize database key", error, {
         operation: "db_key_init_failed",
+        dataDir: process.env.DATA_DIR || "./db/data",
       });
       throw new Error("Database key initialization failed");
     }
@@ -111,7 +140,7 @@ class SystemCrypto {
           process.env.INTERNAL_AUTH_TOKEN = tokenMatch[1];
           return;
         }
-      } catch {}
+      } catch (error) {}
 
       await this.generateAndGuideInternalAuthToken();
     } catch (error) {
