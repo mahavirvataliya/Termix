@@ -328,6 +328,20 @@ async function initializeCompleteDatabase(): Promise<void> {
         FOREIGN KEY (host_id) REFERENCES ssh_data (id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS ssh_credential_shares (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        credential_id INTEGER NOT NULL,
+        owner_id TEXT NOT NULL,
+        shared_with_user_id TEXT NOT NULL,
+        host_ids TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (credential_id) REFERENCES ssh_credentials (id),
+        FOREIGN KEY (owner_id) REFERENCES users (id),
+        FOREIGN KEY (shared_with_user_id) REFERENCES users (id),
+        UNIQUE(credential_id, shared_with_user_id)
+    );
+
 `);
 
   try {

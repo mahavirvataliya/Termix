@@ -2812,6 +2812,57 @@ export async function deployCredentialToHost(
   }
 }
 
+// Credential Sharing API Functions
+export async function shareCredential(
+  credentialId: number,
+  sharedWithUserId: string,
+  hostIds?: number[],
+): Promise<any> {
+  try {
+    const response = await authApi.post(`/credentials/${credentialId}/share`, {
+      sharedWithUserId,
+      hostIds,
+    });
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error, "share credential");
+  }
+}
+
+export async function unshareCredential(
+  credentialId: number,
+  sharedWithUserId: string,
+): Promise<any> {
+  try {
+    const response = await authApi.delete(
+      `/credentials/${credentialId}/share/${sharedWithUserId}`,
+    );
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error, "unshare credential");
+  }
+}
+
+export async function getCredentialShares(
+  credentialId: number,
+): Promise<any> {
+  try {
+    const response = await authApi.get(`/credentials/${credentialId}/shares`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error, "fetch credential shares");
+  }
+}
+
+export async function getUsersList(): Promise<any> {
+  try {
+    const response = await authApi.get("/credentials/users/list");
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error, "fetch users list");
+  }
+}
+
 // ============================================================================
 // SNIPPETS API
 // ============================================================================
@@ -3107,5 +3158,6 @@ export async function unlinkOIDCFromPasswordAccount(
     return response.data;
   } catch (error) {
     throw handleApiError(error, "unlink OIDC from password account");
+>>>>>>> origin/main
   }
 }

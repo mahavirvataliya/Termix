@@ -117,6 +117,9 @@ export interface Credential {
   lastUsed?: string;
   createdAt: string;
   updatedAt: string;
+  isShared?: boolean;
+  ownerId?: string;
+  ownerUsername?: string;
 }
 
 export interface CredentialData {
@@ -131,6 +134,22 @@ export interface CredentialData {
   publicKey?: string;
   keyPassword?: string;
   keyType?: string;
+}
+
+export interface CredentialShare {
+  id: number;
+  credentialId: number;
+  ownerId: string;
+  sharedWithUserId: string;
+  hostIds?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CredentialShareData {
+  credentialId: number;
+  sharedWithUserId: string;
+  hostIds?: number[];
 }
 
 // ============================================================================

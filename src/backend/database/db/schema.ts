@@ -198,6 +198,26 @@ export const sshCredentialUsage = sqliteTable("ssh_credential_usage", {
     .default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const sshCredentialShares = sqliteTable("ssh_credential_shares", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  credentialId: integer("credential_id")
+    .notNull()
+    .references(() => sshCredentials.id, { onDelete: "cascade" }),
+  ownerId: text("owner_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  sharedWithUserId: text("shared_with_user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  hostIds: text("host_ids"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const snippets = sqliteTable("snippets", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: text("user_id")
