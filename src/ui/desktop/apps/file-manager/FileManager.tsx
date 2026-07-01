@@ -669,15 +669,17 @@ function FileManagerContent({ initialHost, onClose }: FileManagerProps) {
         try {
           await ensureSSHConnection();
 
-          for (const file of files) {
-            await deleteSSHItem(
-              sshSessionId,
-              file.path,
-              file.type === "directory",
-              currentHost?.id,
-              currentHost?.userId?.toString(),
-            );
-          }
+          await Promise.all(
+            files.map((file) =>
+              deleteSSHItem(
+                sshSessionId,
+                file.path,
+                file.type === "directory",
+                currentHost?.id,
+                currentHost?.userId?.toString(),
+              ),
+            ),
+          );
 
           const deletedFiles = files.map((file) => ({
             path: file.path,
@@ -931,60 +933,70 @@ function FileManagerContent({ initialHost, onClose }: FileManagerProps) {
 
       const { files, operation } = clipboard;
 
-      let successCount = 0;
-      const copiedItems: string[] = [];
-
-      for (const file of files) {
-        try {
-          if (operation === "copy") {
-            const result = await copySSHItem(
-              sshSessionId,
-              file.path,
-              currentPath,
-              currentHost?.id,
-              currentHost?.userId?.toString(),
-            );
-            copiedItems.push(result.uniqueName || file.name);
-            successCount++;
-          } else {
-            const targetPath = currentPath.endsWith("/")
-              ? `${currentPath}${file.name}`
-              : `${currentPath}/${file.name}`;
-
-            if (file.path !== targetPath) {
-              await moveSSHItem(
+      const results = await Promise.all(
+        files.map(async (file) => {
+          try {
+            if (operation === "copy") {
+              const result = await copySSHItem(
                 sshSessionId,
                 file.path,
-                targetPath,
+                currentPath,
                 currentHost?.id,
                 currentHost?.userId?.toString(),
               );
-              successCount++;
+              return {
+                success: true,
+                uniqueName: result.uniqueName || file.name,
+                file,
+              };
+            } else {
+              const targetPath = currentPath.endsWith("/")
+                ? `${currentPath}${file.name}`
+                : `${currentPath}/${file.name}`;
+
+              if (file.path !== targetPath) {
+                await moveSSHItem(
+                  sshSessionId,
+                  file.path,
+                  targetPath,
+                  currentHost?.id,
+                  currentHost?.userId?.toString(),
+                );
+                return { success: true, file };
+              }
+              return { success: false, skip: true };
             }
+          } catch (error: unknown) {
+            console.error(`Failed to ${operation} file ${file.name}:`, error);
+            toast.error(
+              t("fileManager.operationFailed", {
+                operation:
+                  operation === "copy"
+                    ? t("fileManager.copy")
+                    : t("fileManager.move"),
+                name: file.name,
+                error: error.message,
+              }),
+            );
+            return { success: false };
           }
-        } catch (error: unknown) {
-          console.error(`Failed to ${operation} file ${file.name}:`, error);
-          toast.error(
-            t("fileManager.operationFailed", {
-              operation:
-                operation === "copy"
-                  ? t("fileManager.copy")
-                  : t("fileManager.move"),
-              name: file.name,
-              error: error.message,
-            }),
-          );
-        }
-      }
+        }),
+      );
+
+      const successfulResults = results.filter((r) => r.success);
+      const successCount = successfulResults.length;
+      const copiedItems = results
+        .filter((r) => r.success && operation === "copy")
+        .map((r) => r.uniqueName as string);
 
       if (successCount > 0) {
         if (operation === "copy") {
-          const copiedFiles = files
-            .slice(0, successCount)
-            .map((file, index) => ({
-              originalPath: file.path,
-              targetPath: `${currentPath}/${copiedItems[index] || file.name}`,
-              targetName: copiedItems[index] || file.name,
+          const copiedFiles = results
+            .filter((r) => r.success)
+            .map((r) => ({
+              originalPath: r.file!.path,
+              targetPath: `${currentPath}/${r.uniqueName || r.file!.name}`,
+              targetName: r.uniqueName || r.file!.name,
             }));
 
           const undoAction: UndoAction = {
@@ -999,16 +1011,18 @@ function FileManagerContent({ initialHost, onClose }: FileManagerProps) {
           };
           setUndoHistory((prev) => [...prev.slice(-9), undoAction]);
         } else if (operation === "cut") {
-          const movedFiles = files.slice(0, successCount).map((file) => {
-            const targetPath = currentPath.endsWith("/")
-              ? `${currentPath}${file.name}`
-              : `${currentPath}/${file.name}`;
-            return {
-              originalPath: file.path,
-              targetPath: targetPath,
-              targetName: file.name,
-            };
-          });
+          const movedFiles = results
+            .filter((r) => r.success)
+            .map((r) => {
+              const targetPath = currentPath.endsWith("/")
+                ? `${currentPath}${r.file!.name}`
+                : `${currentPath}/${r.file!.name}`;
+              return {
+                originalPath: r.file!.path,
+                targetPath: targetPath,
+                targetName: r.file!.name,
+              };
+            });
 
           const undoAction: UndoAction = {
             type: "cut",
@@ -1158,33 +1172,37 @@ function FileManagerContent({ initialHost, onClose }: FileManagerProps) {
       switch (lastAction.type) {
         case "copy":
           if (lastAction.data.copiedFiles) {
-            let successCount = 0;
-            for (const copiedFile of lastAction.data.copiedFiles) {
-              try {
-                const isDirectory =
-                  files.find((f) => f.path === copiedFile.targetPath)?.type ===
-                  "directory";
-                await deleteSSHItem(
-                  sshSessionId!,
-                  copiedFile.targetPath,
-                  isDirectory,
-                  currentHost?.id,
-                  currentHost?.userId?.toString(),
-                );
-                successCount++;
-              } catch (error: unknown) {
-                console.error(
-                  `Failed to delete copied file ${copiedFile.targetName}:`,
-                  error,
-                );
-                toast.error(
-                  t("fileManager.deleteCopiedFileFailed", {
-                    name: copiedFile.targetName,
-                    error: error.message,
-                  }),
-                );
-              }
-            }
+            const results = await Promise.all(
+              lastAction.data.copiedFiles.map(async (copiedFile) => {
+                try {
+                  const isDirectory =
+                    files.find((f) => f.path === copiedFile.targetPath)
+                      ?.type === "directory";
+                  await deleteSSHItem(
+                    sshSessionId!,
+                    copiedFile.targetPath,
+                    isDirectory,
+                    currentHost?.id,
+                    currentHost?.userId?.toString(),
+                  );
+                  return { success: true };
+                } catch (error: unknown) {
+                  console.error(
+                    `Failed to delete copied file ${copiedFile.targetName}:`,
+                    error,
+                  );
+                  toast.error(
+                    t("fileManager.deleteCopiedFileFailed", {
+                      name: copiedFile.targetName,
+                      error: error.message,
+                    }),
+                  );
+                  return { success: false };
+                }
+              }),
+            );
+
+            const successCount = results.filter((r) => r.success).length;
 
             if (successCount > 0) {
               setUndoHistory((prev) => prev.slice(0, -1));
@@ -1203,30 +1221,34 @@ function FileManagerContent({ initialHost, onClose }: FileManagerProps) {
 
         case "cut":
           if (lastAction.data.copiedFiles) {
-            let successCount = 0;
-            for (const movedFile of lastAction.data.copiedFiles) {
-              try {
-                await moveSSHItem(
-                  sshSessionId!,
-                  movedFile.targetPath,
-                  movedFile.originalPath,
-                  currentHost?.id,
-                  currentHost?.userId?.toString(),
-                );
-                successCount++;
-              } catch (error: unknown) {
-                console.error(
-                  `Failed to move back file ${movedFile.targetName}:`,
-                  error,
-                );
-                toast.error(
-                  t("fileManager.moveBackFileFailed", {
-                    name: movedFile.targetName,
-                    error: error.message,
-                  }),
-                );
-              }
-            }
+            const results = await Promise.all(
+              lastAction.data.copiedFiles.map(async (movedFile) => {
+                try {
+                  await moveSSHItem(
+                    sshSessionId!,
+                    movedFile.targetPath,
+                    movedFile.originalPath,
+                    currentHost?.id,
+                    currentHost?.userId?.toString(),
+                  );
+                  return { success: true };
+                } catch (error: unknown) {
+                  console.error(
+                    `Failed to move back file ${movedFile.targetName}:`,
+                    error,
+                  );
+                  toast.error(
+                    t("fileManager.moveBackFileFailed", {
+                      name: movedFile.targetName,
+                      error: error.message,
+                    }),
+                  );
+                  return { success: false };
+                }
+              }),
+            );
+
+            const successCount = results.filter((r) => r.success).length;
 
             if (successCount > 0) {
               setUndoHistory((prev) => prev.slice(0, -1));
@@ -1547,47 +1569,52 @@ function FileManagerContent({ initialHost, onClose }: FileManagerProps) {
     try {
       await ensureSSHConnection();
 
-      let successCount = 0;
-      const movedItems: string[] = [];
+      const results = await Promise.all(
+        draggedFiles.map(async (file) => {
+          try {
+            const targetPath = targetFolder.path.endsWith("/")
+              ? `${targetFolder.path}${file.name}`
+              : `${targetFolder.path}/${file.name}`;
 
-      for (const file of draggedFiles) {
-        try {
-          const targetPath = targetFolder.path.endsWith("/")
-            ? `${targetFolder.path}${file.name}`
-            : `${targetFolder.path}/${file.name}`;
-
-          if (file.path !== targetPath) {
-            await moveSSHItem(
-              sshSessionId,
-              file.path,
-              targetPath,
-              currentHost?.id,
-              currentHost?.userId?.toString(),
+            if (file.path !== targetPath) {
+              await moveSSHItem(
+                sshSessionId,
+                file.path,
+                targetPath,
+                currentHost?.id,
+                currentHost?.userId?.toString(),
+              );
+              return { success: true, file };
+            }
+            return { success: false, skip: true };
+          } catch (error: unknown) {
+            console.error(`Failed to move file ${file.name}:`, error);
+            toast.error(
+              t("fileManager.moveFileFailed", { name: file.name }) +
+                ": " +
+                error.message,
             );
-            movedItems.push(file.name);
-            successCount++;
+            return { success: false };
           }
-        } catch (error: unknown) {
-          console.error(`Failed to move file ${file.name}:`, error);
-          toast.error(
-            t("fileManager.moveFileFailed", { name: file.name }) +
-              ": " +
-              error.message,
-          );
-        }
-      }
+        }),
+      );
+
+      const successfulResults = results.filter((r) => r.success);
+      const successCount = successfulResults.length;
 
       if (successCount > 0) {
-        const movedFiles = draggedFiles.slice(0, successCount).map((file) => {
-          const targetPath = targetFolder.path.endsWith("/")
-            ? `${targetFolder.path}${file.name}`
-            : `${targetFolder.path}/${file.name}`;
-          return {
-            originalPath: file.path,
-            targetPath: targetPath,
-            targetName: file.name,
-          };
-        });
+        const movedFiles = results
+          .filter((r) => r.success)
+          .map((r) => {
+            const targetPath = targetFolder.path.endsWith("/")
+              ? `${targetFolder.path}${r.file!.name}`
+              : `${targetFolder.path}/${r.file!.name}`;
+            return {
+              originalPath: r.file!.path,
+              targetPath: targetPath,
+              targetName: r.file!.name,
+            };
+          });
 
         const undoAction: UndoAction = {
           type: "cut",
