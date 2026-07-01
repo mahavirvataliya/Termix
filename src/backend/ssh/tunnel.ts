@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import { getCorsOptions } from "../utils/cors-utils.js";
 import cookieParser from "cookie-parser";
 import { Client } from "ssh2";
 import { ChildProcess } from "child_process";
@@ -22,34 +23,8 @@ import { DataCrypto } from "../utils/data-crypto.js";
 
 const app = express();
 app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-
-      const allowedOrigins = [
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-      ];
-
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      if (origin.startsWith("https://")) {
-        return callback(null, true);
-      }
-
-      if (origin.startsWith("http://")) {
-        return callback(null, true);
-      }
-
-      callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: [
+  cors(
+    getCorsOptions([
       "Origin",
       "X-Requested-With",
       "Content-Type",
@@ -57,8 +32,8 @@ app.use(
       "Authorization",
       "User-Agent",
       "X-Electron-App",
-    ],
-  }),
+    ]),
+  ),
 );
 app.use(cookieParser());
 app.use(express.json());
