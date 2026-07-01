@@ -18,11 +18,12 @@ export function detectPlatform(req: Request): DeviceType {
     return "desktop";
   }
 
-  if (userAgent.includes("Termix-Mobile")) {
-    return "mobile";
-  }
-
-  if (userAgent.includes("Android")) {
+  if (
+    userAgent.includes("Termix-Mobile") ||
+    /mobile/i.test(userAgent) ||
+    /android/i.test(userAgent) ||
+    /iphone|ipad|ipod/i.test(userAgent)
+  ) {
     return "mobile";
   }
 
@@ -85,11 +86,12 @@ function parseMobileUserAgent(userAgent: string): DeviceInfo {
   const termixPlatformMatch = userAgent.match(/Termix-Mobile\/(Android|iOS)/i);
   if (termixPlatformMatch) {
     const platform = termixPlatformMatch[1];
+    const searchArea = userAgent.replace(/Termix-Mobile\/(?:Android|iOS)/i, "");
     if (platform.toLowerCase() === "android") {
-      const androidMatch = userAgent.match(/Android ([\d.]+)/);
+      const androidMatch = searchArea.match(/Android ([\d.]+)/);
       os = androidMatch ? `Android ${androidMatch[1]}` : "Android";
     } else if (platform.toLowerCase() === "ios") {
-      const iosMatch = userAgent.match(/OS ([\d_]+)/);
+      const iosMatch = searchArea.match(/OS ([\d_]+)/);
       if (iosMatch) {
         const iosVersion = iosMatch[1].replace(/_/g, ".");
         os = `iOS ${iosVersion}`;
@@ -117,7 +119,7 @@ function parseMobileUserAgent(userAgent: string): DeviceInfo {
   }
 
   const versionMatch = userAgent.match(
-    /Termix-Mobile\/(?:Android|iOS|)([\d.]+)/i,
+    /Termix-Mobile\/(?:Android|iOS|)\s*([\d.]+)/i,
   );
   if (versionMatch) {
     version = versionMatch[1];
@@ -141,6 +143,10 @@ function parseWebUserAgent(userAgent: string): DeviceInfo {
     const match = userAgent.match(/Edg\/([\d.]+)/);
     browser = "Edge";
     version = match ? match[1] : "Unknown";
+  } else if (userAgent.includes("Opera/") || userAgent.includes("OPR/")) {
+    const match = userAgent.match(/(?:Opera|OPR)\/([\d.]+)/);
+    browser = "Opera";
+    version = match ? match[1] : "Unknown";
   } else if (userAgent.includes("Chrome/") && !userAgent.includes("Edg")) {
     const match = userAgent.match(/Chrome\/([\d.]+)/);
     browser = "Chrome";
@@ -152,10 +158,6 @@ function parseWebUserAgent(userAgent: string): DeviceInfo {
   } else if (userAgent.includes("Safari/") && !userAgent.includes("Chrome")) {
     const match = userAgent.match(/Version\/([\d.]+)/);
     browser = "Safari";
-    version = match ? match[1] : "Unknown";
-  } else if (userAgent.includes("Opera/") || userAgent.includes("OPR/")) {
-    const match = userAgent.match(/(?:Opera|OPR)\/([\d.]+)/);
-    browser = "Opera";
     version = match ? match[1] : "Unknown";
   }
 
@@ -217,7 +219,7 @@ function parseWindowsVersion(userAgent: string): string {
 }
 
 function parseMacVersion(userAgent: string): string {
-  const match = userAgent.match(/Mac OS X ([\d_]+)/);
+  const match = userAgent.match(/Mac OS X ([\d._]+)/);
   if (match) {
     const version = match[1].replace(/_/g, ".");
     const parts = version.split(".");
