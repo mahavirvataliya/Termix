@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import { getCorsOptions } from "./utils/cors-utils.js";
 import cookieParser from "cookie-parser";
 import { getDb } from "./database/db/index.js";
 import { recentActivity, sshData } from "./database/db/schema.js";
@@ -18,40 +19,14 @@ const activityRateLimiter = new Map<string, number>();
 const RATE_LIMIT_MS = 1000; // 1 second window
 
 app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-
-      const allowedOrigins = [
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-      ];
-
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      if (origin.startsWith("https://")) {
-        return callback(null, true);
-      }
-
-      if (origin.startsWith("http://")) {
-        return callback(null, true);
-      }
-
-      callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: [
+  cors(
+    getCorsOptions([
       "Content-Type",
       "Authorization",
       "User-Agent",
       "X-Electron-App",
-    ],
-  }),
+    ]),
+  ),
 );
 app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
